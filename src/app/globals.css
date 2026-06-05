@@ -1,0 +1,101 @@
+@import "tailwindcss";
+
+@theme {
+  --color-cream: #F5E9DA;
+  --color-beige: #E7D7C9;
+  --color-brown-warm: #5C3B2E;
+  --color-brown-dark: #3A261D;
+  --color-terracotta: #C47A5A;
+  --color-olive: #7A8B5A;
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --radius-xl: 1rem;
+  --radius-2xl: 1.5rem;
+  --radius-3xl: 2rem;
+
+  --font-serif: var(--font-playfair);
+  --font-sans: var(--font-inter);
+}
+
+:root {
+  --background: #F5E9DA; /* Cream */
+  --foreground: #3A261D; /* Coffee Dark Brown */
+
+  --primary: #5C3B2E; /* Warm Brown */
+  --primary-foreground: #F5E9DA;
+
+  --secondary: #E7D7C9; /* Soft Beige */
+  --secondary-foreground: #3A261D;
+
+  --muted: #E7D7C9;
+  --muted-foreground: #5C3B2E;
+
+  --accent: #C47A5A; /* Terracotta */
+  --accent-foreground: #F5E9DA;
+
+  --border: #E7D7C9;
+  --input: #E7D7C9;
+  --ring: #C47A5A;
+
+  --radius: 1.5rem;
+}
+
+.dark {
+  --background: #3A261D; /* Coffee Dark Brown */
+  --foreground: #F5E9DA; /* Cream */
+
+  --primary: #E7D7C9;
+  --primary-foreground: #3A261D;
+
+  --secondary: #5C3B2E;
+  --secondary-foreground: #F5E9DA;
+
+  --muted: #5C3B2E;
+  --muted-foreground: #E7D7C9;
+
+  --accent: #C47A5A;
+  --accent-foreground: #3A261D;
+
+  --border: #5C3B2E;
+  --input: #5C3B2E;
+  --ring: #C47A5A;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+  }
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-serif font-semibold;
+  }
+}
+
+/* Custom Utilities */
+.glass {
+  @apply bg-white/10 backdrop-blur-md border border-white/20;
+}
+
+.premium-shadow {
+  box-shadow: 0 10px 30px -10px rgba(58, 38, 29, 0.1);
+}
+
+.premium-shadow-hover {
+  box-shadow: 0 20px 40px -15px rgba(58, 38, 29, 0.15);
+}
+
