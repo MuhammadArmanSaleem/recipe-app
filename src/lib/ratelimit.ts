@@ -35,12 +35,17 @@ export async function checkRateLimit(userId: string, type: 'ai' | 'extract'): Pr
   
   if (!limiter) return { allowed: true }; // Bypass if no Redis configured
 
-  const { success, reset } = await limiter.limit(userId);
-  const now = Date.now();
-  const retryAfter = Math.ceil((reset - now) / 1000);
+  try {
+    const { success, reset } = await limiter.limit(userId);
+    const now = Date.now();
+    const retryAfter = Math.max(0, Math.ceil((reset - now) / 1000));
 
-  return { 
-    allowed: success, 
-    retryAfter 
-  };
+    return { 
+      allowed: success, 
+      retryAfter 
+    };
+  } catch (error) {
+    console.error("Rate limit check failed (Upstash/Redis error):", error);
+    return { allowed: true }; // Fail-open
+  }
 }

@@ -18,5 +18,5 @@ export default async function SavedPage() {
   // Fetch initial data on server (OBJ-3: Server-side fetching)
   const initialRecipes = await getCachedRecipes(user.id);
 
-  return <SavedClient initialRecipes={initialRecipes as unknown as import("./SavedClient").SavedRecipe[]} />;
+  return <SavedClient initialRecipes={initialRecipes} />;
 }

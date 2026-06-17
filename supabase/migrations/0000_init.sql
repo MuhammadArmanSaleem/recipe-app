@@ -15,7 +15,8 @@ create table public.recipes (
   original_url text not null,
   thumbnail_url text,
   status text not null default 'processing', -- 'processing' | 'completed' | 'failed'
-  current_version_id uuid -- references recipe_versions(id) initialized as null
+  current_version_id uuid, -- references recipe_versions(id) initialized as null
+  constraint recipes_status_check check (status in ('processing', 'completed', 'failed'))
 );
 
 -- Recipe Versions table (Single source of truth JSON container)
@@ -25,7 +26,8 @@ create table public.recipe_versions (
   version_number integer not null,
   prompt_used text, -- prompt used for transformation (null for original)
   created_at timestamp with time zone default timezone('utc'::text, now()) not null,
-  recipe_data jsonb not null -- contains { title, prepTime, nutrition, ingredients, instructions }
+  recipe_data jsonb not null, -- contains { title, prepTime, nutrition, ingredients, instructions }
+  unique (recipe_id, version_number)
 );
 
 -- Add foreign key constraint back to recipes for current_version_id

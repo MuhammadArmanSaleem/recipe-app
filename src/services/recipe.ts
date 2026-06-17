@@ -1,6 +1,7 @@
 import { getSupabaseServer } from "@/lib/supabase/server";
 import { unstable_cache } from "next/cache";
 import { RecipeVersion } from "@/types/recipe";
+import type { SavedRecipe } from "@/app/saved/SavedClient";
 
 /**
  * Fetches the user's profile with caching.
@@ -28,7 +29,7 @@ export async function getCachedProfile(userId: string) {
 /**
  * Fetches the user's saved recipes with caching.
  */
-export async function getCachedRecipes(userId: string) {
+export async function getCachedRecipes(userId: string): Promise<SavedRecipe[]> {
   const fetcher = unstable_cache(
     async () => {
       const supabase = await getSupabaseServer();

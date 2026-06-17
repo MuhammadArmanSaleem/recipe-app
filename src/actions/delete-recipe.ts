@@ -17,7 +17,7 @@ export async function deleteRecipe(id: string) {
 
   if (error) throw new Error(error.message);
 
-  revalidateTag(`recipes-${user.id}`, "page");
+  revalidateTag(`recipes-${user.id}`, "max");
   revalidatePath("/saved");
   revalidatePath("/");
 }

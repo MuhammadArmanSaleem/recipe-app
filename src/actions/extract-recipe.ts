@@ -4,7 +4,7 @@ import { getSupabaseServer, ensureUserProfile } from "@/lib/supabase/server";
 import { fetchAndCleanTranscript, extractYoutubeVideoId } from "@/lib/youtube/transcript";
 import { extractRecipeFromTranscript } from "@/lib/ai/gemini";
 import { fetchVideoDescription } from "@/lib/youtube/description";
-import { extractRecipeFromVideo } from "@/lib/youtube/videoUnderstanding";
+import { extractRecipeFromVideo, VideoUnderstandingResult } from "@/lib/youtube/videoUnderstanding";
 import { RecipeData } from "@/types/recipe";
 import { youtubeUrlSchema } from "@/lib/validation/youtube";
 import { checkRateLimit } from "@/lib/ratelimit";
@@ -85,16 +85,31 @@ export async function extractRecipe(url: string): Promise<ExtractRecipeResult> {
   if (!recipeData) {
     try {
       console.log("Trying Tier 3 (Video Understanding)...");
-      const videoResult = await extractRecipeFromVideo(url, userContext);
-      if (videoResult.status === "SUCCESS") {
-        const { RecipeDataSchema } = await import("@/schemas/recipe");
-        const cleanJson = videoResult.rawAiResponse.replace(/```json|```/g, "").trim();
-        const data = RecipeDataSchema.parse(JSON.parse(cleanJson));
-        recipeData = data as RecipeData;
-        extractedVia = "video";
+      let timeoutId: NodeJS.Timeout | undefined;
+      const timeoutPromise = new Promise((_, reject) => {
+        timeoutId = setTimeout(() => reject(new Error("AI_TIMEOUT")), 45000);
+      });
+
+      try {
+        const videoResult = await Promise.race([
+          extractRecipeFromVideo(url, userContext),
+          timeoutPromise
+        ]).finally(() => {
+          if (timeoutId) clearTimeout(timeoutId);
+        }) as VideoUnderstandingResult;
+        
+        if (videoResult.status === "SUCCESS") {
+          const { RecipeDataSchema } = await import("@/schemas/recipe");
+          const cleanJson = videoResult.rawAiResponse.replace(/```[a-z]*/gi, "").trim();
+          const data = RecipeDataSchema.parse(JSON.parse(cleanJson));
+          recipeData = data as RecipeData;
+          extractedVia = "video";
+        }
+      } catch (_tier3Error) {
+        console.warn("Tier 3 (Video) Gemini call failed.");
       }
-    } catch (_tier3Error) {
-      console.warn("Tier 3 (Video) Gemini call failed.");
+    } catch (_outerError) {
+      console.warn("Tier 3 logic failed.");
     }
   }
 
@@ -103,43 +118,59 @@ export async function extractRecipe(url: string): Promise<ExtractRecipeResult> {
     return { success: false, error: "TRANSCRIPT_MISSING", status: "TRANSCRIPT_MISSING" };
   }
 
-  // Persist
-  const { data: recipe, error: recipeError } = await supabase
-    .from("recipes")
-    .insert({
-      user_id: user.id,
-      original_url: url,
-      source: 'youtube',
-      status: "completed",
-      thumbnail_url: thumbnailUrl,
-    })
-    .select()
-    .single();
+  let recipeId: string | null = null;
+  try {
+    // Persist Recipe
+    const { data: recipe, error: recipeError } = await supabase
+      .from("recipes")
+      .insert({
+        user_id: user.id,
+        original_url: url,
+        source: 'youtube',
+        status: "completed",
+        thumbnail_url: thumbnailUrl,
+      })
+      .select()
+      .single();
 
-  if (recipeError) throw new Error(`DB Save Failed: ${recipeError.message}`);
+    if (recipeError) throw new Error(`DB Save Failed: ${recipeError.message}`);
+    recipeId = recipe.id;
 
-  const { data: version, error: versionError } = await supabase
-    .from("recipe_versions")
-    .insert({
-      recipe_id: recipe.id,
-      version_number: 1,
-      recipe_data: recipeData,
-    })
-    .select()
-    .single();
+    // Persist Version
+    const { data: version, error: versionError } = await supabase
+      .from("recipe_versions")
+      .insert({
+        recipe_id: recipe.id,
+        version_number: 1,
+        recipe_data: recipeData,
+      })
+      .select()
+      .single();
 
-  if (versionError) throw new Error(`DB Version Failed: ${versionError.message}`);
+    if (versionError) throw new Error(`DB Version Failed: ${versionError.message}`);
 
-  await supabase
-    .from("recipes")
-    .update({ current_version_id: version.id })
-    .eq("id", recipe.id);
-      
-  revalidateTag(`recipes-${user.id}`, "page");
+    // Update Current Version Pointer
+    const { error: updateError } = await supabase
+      .from("recipes")
+      .update({ current_version_id: version.id })
+      .eq("id", recipe.id);
 
-  return {
-    success: true,
-    data: { ...recipeData, id: recipe.id },
-    extractedVia: extractedVia!
-  };
+    if (updateError) throw new Error(`DB Update Failed: ${updateError.message}`);
+        
+    revalidateTag(`recipes-${user.id}`, "max");
+
+    return {
+      success: true,
+      data: { ...recipeData, id: recipe.id },
+      extractedVia: extractedVia || "transcript"
+    };
+  } catch (err: unknown) {
+    const error = err as { message?: string };
+    console.error("Extraction Persistence Failed:", error);
+    // Cleanup orphaned recipe if it exists
+    if (recipeId) {
+      await supabase.from("recipes").delete().eq("id", recipeId);
+    }
+    return { success: false, error: "Failed to save recipe. Please try again." };
+  }
 }

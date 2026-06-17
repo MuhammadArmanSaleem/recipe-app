@@ -32,61 +32,76 @@ export async function createPantryRecipe(
       .single();
 
     // 2. Call Gemini (with 30s timeout)
-    const timeoutPromise = new Promise((_, reject) => 
-      setTimeout(() => reject(new Error("AI_TIMEOUT")), 30000)
-    );
+    let timeoutId: NodeJS.Timeout | undefined;
+    const timeoutPromise = new Promise((_, reject) => {
+      timeoutId = setTimeout(() => reject(new Error("AI_TIMEOUT")), 30000);
+    });
 
     const result = await Promise.race([
       createRecipeFromPantry(ingredients, profile || undefined),
       timeoutPromise
-    ]) as RecipeData | { error: string };
+    ]).finally(() => {
+      if (timeoutId) clearTimeout(timeoutId);
+    }) as RecipeData | { error: string };
 
     if ("error" in result) {
       return { success: false, error: result.error };
     }
 
     // 3. Persist
-    const { data: recipe, error: recipeError } = await supabase
-      .from("recipes")
-      .insert({
-        user_id: user.id,
-        source: 'pantry',
-        original_pantry_input: ingredients,
-        status: 'completed',
-        // No thumbnail for pantry recipes, maybe a placeholder later
-      })
-      .select()
-      .single();
+    let recipeId: string | null = null;
+    try {
+      const { data: recipe, error: recipeError } = await supabase
+        .from("recipes")
+        .insert({
+          user_id: user.id,
+          source: 'pantry',
+          original_pantry_input: ingredients,
+          status: 'completed',
+        })
+        .select()
+        .single();
 
-    if (recipeError) throw new Error(`DB Error: ${recipeError.message}`);
+      if (recipeError) throw new Error(`DB Error: ${recipeError.message}`);
+      recipeId = recipe.id;
 
-    const { data: version, error: versionError } = await supabase
-      .from("recipe_versions")
-      .insert({
-        recipe_id: recipe.id,
-        version_number: 1,
-        recipe_data: result,
-      })
-      .select()
-      .single();
+      const { data: version, error: versionError } = await supabase
+        .from("recipe_versions")
+        .insert({
+          recipe_id: recipe.id,
+          version_number: 1,
+          recipe_data: result,
+        })
+        .select()
+        .single();
 
-    if (versionError) throw new Error(`DB Version Error: ${versionError.message}`);
+      if (versionError) throw new Error(`DB Version Error: ${versionError.message}`);
 
-    await supabase
-      .from("recipes")
-      .update({ current_version_id: version.id })
-      .eq("id", recipe.id);
+      const { error: updateError } = await supabase
+        .from("recipes")
+        .update({ current_version_id: version.id })
+        .eq("id", recipe.id);
 
-    revalidateTag(`recipes-${user.id}`, "page");
-    revalidatePath("/saved");
+      if (updateError) throw new Error(`DB Update Error: ${updateError.message}`);
 
-    return {
-      success: true,
-      data: {
-        ...result,
-        id: recipe.id,
-      },
-    };
+      revalidateTag(`recipes-${user.id}`, "max");
+      revalidatePath("/saved");
+
+      return {
+        success: true,
+        data: {
+          ...result,
+          id: recipe.id,
+        },
+      };
+    } catch (dbErr: unknown) {
+      const error = dbErr as { message?: string };
+      console.error("Pantry Persistence Failed:", error);
+      if (recipeId) {
+        await supabase.from("recipes").delete().eq("id", recipeId);
+      }
+      return { success: false, error: "Failed to save your recipe. Please try again." };
+    }
   } catch (err: unknown) {
     const error = err as Error;
     console.error("Pantry Action Error:", error);

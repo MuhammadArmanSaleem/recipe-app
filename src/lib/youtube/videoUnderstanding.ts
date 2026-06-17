@@ -2,7 +2,11 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { GEMINI_MODEL } from "../ai/config";
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
+if (!process.env.GEMINI_API_KEY) {
+  throw new Error("GEMINI_API_KEY is not set. Add it to .env.local");
+}
+
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 export type UserContext = {
   dietaryGoals: string[];

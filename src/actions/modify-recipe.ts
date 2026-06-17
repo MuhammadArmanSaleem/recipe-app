@@ -68,14 +68,17 @@ export async function modifyRecipe(
 
   try {
     // 4. Pass current version and prompt to Gemini (with 30s timeout)
-    const timeoutPromise = new Promise((_, reject) => 
-      setTimeout(() => reject(new Error("AI_TIMEOUT")), 30000)
-    );
+    let timeoutId: NodeJS.Timeout | undefined;
+    const timeoutPromise = new Promise((_, reject) => {
+      timeoutId = setTimeout(() => reject(new Error("AI_TIMEOUT")), 30000);
+    });
 
     const newRecipeData = await Promise.race([
       modifyRecipeWithAi(currentRecipe, userPrompt, profile || undefined),
       timeoutPromise
-    ]) as RecipeData;
+    ]).finally(() => {
+      if (timeoutId) clearTimeout(timeoutId);
+    }) as RecipeData;
 
     // 5. Persist modified recipe (Best-effort for saved recipes)
     if (!isTemp) {
@@ -102,14 +105,21 @@ export async function modifyRecipe(
           .single();
 
         if (versionError) {
+          if (versionError.code === "23505") { // Uniqueness violation
+            console.error("Concurrency conflict: Version already exists for recipe", recipeId);
+            return { success: false, error: "Someone else is currently modifying this recipe. Please refresh and try again." };
+          }
           console.warn("Database error during version save:", versionError.message);
+          throw new Error("Failed to save new recipe version.");
         } else {
-          await supabase
+          const { error: updateError } = await supabase
             .from("recipes")
             .update({ current_version_id: version.id })
             .eq("id", recipeId);
             
-          revalidateTag(`recipes-${user.id}`, "page");
+          if (updateError) throw new Error("Failed to update current recipe version.");
+
+          revalidateTag(`recipes-${user.id}`, "max");
           revalidatePath("/saved");
         }
       } catch (dbError) {

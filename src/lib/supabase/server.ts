@@ -9,9 +9,16 @@ import { cache } from "react";
 export const getSupabaseServer = cache(async () => {
   const cookieStore = await cookies();
 
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+  if (!url || !anonKey) {
+    throw new Error("Missing Supabase environment variables (URL or ANON_KEY)");
+  }
+
   return createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    url,
+    anonKey,
     {
       cookies: {
         get(name: string) {
@@ -20,15 +27,15 @@ export const getSupabaseServer = cache(async () => {
         set(name: string, value: string, options: CookieOptions) {
           try {
             cookieStore.set({ name, value, ...options });
-          } catch (_error) {
-            // Handle cookie set error
+          } catch (error) {
+            console.warn(`Failed to set cookie "${name}":`, error);
           }
         },
         remove(name: string, options: CookieOptions) {
           try {
             cookieStore.set({ name, value: "", ...options });
-          } catch (_error) {
-            // Handle cookie remove error
+          } catch (error) {
+            console.warn(`Failed to remove cookie "${name}":`, error);
           }
         },
       },
@@ -40,8 +47,11 @@ export const getSupabaseServer = cache(async () => {
  * Ensures a user profile exists in the 'profiles' table.
  */
 export const ensureUserProfile = async (user: { id: string; user_metadata?: { full_name?: string; avatar_url?: string }; email?: string }) => {
-  const supabase = process.env.SUPABASE_SERVICE_ROLE_KEY 
-    ? createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  
+  const supabase = serviceRoleKey && supabaseUrl
+    ? createClient(supabaseUrl, serviceRoleKey)
     : await getSupabaseServer();
     
   const { data: existing } = await supabase
@@ -64,7 +74,11 @@ export const ensureUserProfile = async (user: { id: string; user_metadata?: { fu
     });
 
   if (error) {
-    console.error("Failed to create user profile:", error);
+    console.error(`[CRITICAL] Profile creation failed for user ${user.id}:`, {
+      message: error.message,
+      code: error.code,
+      details: error.details
+    });
     throw new Error(`Profile creation failed: ${error.message}`);
   }
 };

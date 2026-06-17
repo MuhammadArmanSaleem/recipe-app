@@ -3,5 +3,7 @@ create policy "Users can insert own profile"
 on public.profiles for insert 
 with check (auth.uid() = id);
 
--- Ensure the 'all' policy for recipes actually covers everything
--- (The existing one is already 'for all', but this confirms intent)
+-- Allow users to select their own profile record
+create policy "Users can select own profile"
+on public.profiles for select
+using (auth.uid() = id);

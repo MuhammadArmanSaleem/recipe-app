@@ -4,7 +4,7 @@ const numericField = z.preprocess((val) => {
   if (val === null || val === undefined || val === "") return 0;
   const parsed = Number(val);
   return isNaN(parsed) ? 0 : parsed;
-}, z.number().default(0));
+}, z.number());
 
 export const NutritionSchema = z.object({
   calories: z.coerce.string().optional().default("0"),

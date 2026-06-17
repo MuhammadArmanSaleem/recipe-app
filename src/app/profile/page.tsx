@@ -3,6 +3,7 @@ import ProfileClient from "./ProfileClient";
 import { getSupabaseServer } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
 import { getCachedProfile } from "@/services/recipe";
+import type { Profile } from "@/types/profile";
 
 /**
  * Profile Page (Server Component)
@@ -26,7 +27,7 @@ export default async function ProfilePage() {
 
   return (
     <ProfileClient 
-      initialProfile={profileData as unknown as import("./ProfileClient").Profile} 
+      initialProfile={profileData as Profile | null} 
       initialRecipeCount={count || 0}
       user={user}
     />

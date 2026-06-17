@@ -12,7 +12,7 @@ export async function syncProfile() {
   }
 
   await ensureUserProfile(user);
-  revalidateTag(`profile-${user.id}`, "page");
+  revalidateTag(`profile-${user.id}`, "max");
   revalidatePath("/profile");
 }
 
@@ -40,6 +40,6 @@ export async function updateProfile(updates: {
     throw new Error(error.message);
   }
 
-  revalidateTag(`profile-${user.id}`, "page");
+  revalidateTag(`profile-${user.id}`, "max");
   revalidatePath("/profile");
 }

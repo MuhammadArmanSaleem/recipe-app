@@ -40,11 +40,17 @@ export async function proxy(request: NextRequest) {
   );
 
   let user = null;
+  let authCheckFailed = false;
   try {
     const { data } = await supabase.auth.getUser();
     user = data.user;
   } catch (err) {
+    authCheckFailed = true;
     console.error("Proxy: Auth check failed (likely network/DNS issue):", err);
+  }
+
+  if (authCheckFailed) {
+    return new NextResponse("Authentication service temporarily unavailable.", { status: 503 });
   }
 
   // If user is not signed in and trying to access a protected route, redirect to login
