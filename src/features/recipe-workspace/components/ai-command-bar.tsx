@@ -9,9 +9,9 @@ interface AiCommandBarProps {
 }
 
 const SUGGESTIONS = [
-  { icon: "fitness_center", label: "Make this high protein" },
-  { icon: "bolt", label: "Reduce calories" },
-  { icon: "eco", label: "Make it Vegan" },
+  { label: "Make this high protein" },
+  { label: "Reduce calories" },
+  { label: "Make it Vegan" },
 ];
 
 export function AiCommandBar({ onCommand, isLoading }: AiCommandBarProps) {
@@ -29,7 +29,6 @@ export function AiCommandBar({ onCommand, isLoading }: AiCommandBarProps) {
               disabled={isLoading}
               className="flex items-center gap-2 px-4 py-2 bg-tertiary-container text-on-tertiary-container rounded-full border border-tertiary/20 font-label-sm whitespace-nowrap hover:bg-tertiary hover:text-on-tertiary transition-colors disabled:opacity-50 text-xs font-bold"
             >
-              <span className="material-symbols-outlined text-[18px]">{suggestion.icon}</span>
               {suggestion.label}
             </motion.button>
           ))}

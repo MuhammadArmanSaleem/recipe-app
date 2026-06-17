@@ -11,29 +11,43 @@ interface RecipeSelectorProps {
 
 export function RecipeSelector({ activeView, onChange }: RecipeSelectorProps) {
   return (
-    <section className="mt-section-gap flex justify-center w-full max-w-sm mx-auto">
-      <div className="bg-surface-dim p-1 rounded-full flex w-full border border-brown-warm/5">
+    <section className="flex justify-center w-full max-w-sm mx-auto">
+      <div className="bg-brown-warm/10 p-1.5 rounded-full flex w-full relative border border-brown-warm/5 backdrop-blur-sm">
         <button
           onClick={() => onChange("recipe")}
           className={cn(
-            "flex-1 py-3 px-6 rounded-full font-label-md transition-all font-bold text-sm",
+            "flex-1 py-2.5 px-6 rounded-full font-black text-[10px] tracking-widest transition-all duration-300 relative z-10",
             activeView === "recipe" 
-              ? "text-on-secondary bg-secondary shadow-sm" 
-              : "text-on-surface-variant hover:bg-surface-bright/50"
+              ? "bg-brown-warm text-white shadow-lg" 
+              : "text-brown-warm/60 hover:text-brown-warm"
           )}
         >
-          Recipe
+          {activeView === "recipe" && (
+            <motion.div
+              layoutId="activeTab"
+              className="absolute inset-0 bg-brown-warm rounded-full -z-10"
+              transition={{ type: "spring", stiffness: 380, damping: 30 }}
+            />
+          )}
+          <span>RECIPE</span>
         </button>
         <button
           onClick={() => onChange("ingredients")}
           className={cn(
-            "flex-1 py-3 px-6 rounded-full font-label-md transition-all font-bold text-sm",
+            "flex-1 py-2.5 px-6 rounded-full font-black text-[10px] tracking-widest transition-all duration-300 relative z-10",
             activeView === "ingredients" 
-              ? "text-on-secondary bg-secondary shadow-sm" 
-              : "text-on-surface-variant hover:bg-surface-bright/50"
+              ? "bg-brown-warm text-white shadow-lg" 
+              : "text-brown-warm/60 hover:text-brown-warm"
           )}
         >
-          Ingredients
+          {activeView === "ingredients" && (
+            <motion.div
+              layoutId="activeTab"
+              className="absolute inset-0 bg-brown-warm rounded-full -z-10"
+              transition={{ type: "spring", stiffness: 380, damping: 30 }}
+            />
+          )}
+          <span>INGREDIENTS</span>
         </button>
       </div>
     </section>

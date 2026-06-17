@@ -84,14 +84,11 @@ export function GroceryOrderModal({ isOpen, onClose, ingredients }: GroceryOrder
                   <span className="font-bold text-primary">{missingIngredients.length} items</span>
                 </div>
                 
-                <motion.button
-                  whileHover={{ scale: 1.02 }}
-                  whileTap={{ scale: 0.98 }}
-                  className="w-full bg-primary text-white py-4 rounded-2xl font-bold flex items-center justify-center gap-3 shadow-lg"
-                >
-                  <ShoppingBag size={20} />
-                  <span>Place Delivery Order</span>
-                </motion.button>
+                <div className="w-full bg-brown-warm/5 py-4 rounded-2xl border border-dashed border-brown-warm/20 flex items-center justify-center">
+                  <span className="text-brown-warm/50 text-xs font-bold uppercase tracking-widest">
+                    Delivery Feature Coming Soon
+                  </span>
+                </div>
               </div>
             </div>
           </motion.div>
