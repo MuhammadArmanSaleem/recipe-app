@@ -1,16 +1,15 @@
 "use client";
 
 import React from "react";
-import { LayoutGrid, Bookmark, Sparkles, User } from "lucide-react";
+import { LayoutGrid, Bookmark, User } from "lucide-react";
 import { motion } from "framer-motion";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 
-const NAV_ITEMS = [
+const NAV_ITEMS: { icon: React.ElementType; label: string; href: string; fill?: boolean }[] = [
   { icon: LayoutGrid, label: "Workspace", href: "/" },
   { icon: Bookmark, label: "Saved", href: "/saved" },
-  { icon: Sparkles, label: "AI Chef", href: "/ai", fill: true },
   { icon: User, label: "Profile", href: "/profile" },
 ];
 
