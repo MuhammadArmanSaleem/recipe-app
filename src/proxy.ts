@@ -72,7 +72,9 @@ export const config = {
      * - auth (authentication routes)
      * - favicon.ico (favicon file)
      * - public (public assets)
+     * - sw.js (service worker)
+     * - manifest.webmanifest (PWA manifest)
      */
-    "/((?!_next/static|_next/image|auth|favicon.ico|public).*)",
+    "/((?!_next/static|_next/image|auth|favicon.ico|public|sw\\.js|manifest\\.webmanifest).*)",
   ],
 };
