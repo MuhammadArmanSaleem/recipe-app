@@ -56,7 +56,7 @@ interface NormalizedInstruction {
   description: string;
 }
 
-interface NormalizedRecipe {
+export interface NormalizedRecipe {
   title: string;
   prepTime: string;
   tailoredFor: string[];
@@ -71,7 +71,7 @@ interface NormalizedRecipe {
  * Normalizes AI response to handle common casing variations (PascalCase, CamelCase, snake_case) 
  * and ensures basic structure exists before Zod validation.
  */
-function normalizeAiResponse(data: unknown): NormalizedRecipe | { error: string } {
+export function normalizeAiResponse(data: unknown): NormalizedRecipe | { error: string } {
   if (!data) return { error: "Empty AI response" };
   
   const obj = (Array.isArray(data) ? data[0] : data) as Record<string, unknown>;

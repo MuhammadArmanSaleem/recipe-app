@@ -1,4 +1,4 @@
-import { YoutubeTranscript } from "youtube-transcript";
+import { Innertube } from "youtubei.js";
 
 export type TranscriptResult =
   | { status: "SUCCESS"; transcript: string; source: "transcript"; thumbnailUrl: string }
@@ -38,47 +38,34 @@ function cleanTranscript(rawText: string): string {
 }
 
 /**
- * Fetches and cleans a YouTube transcript.
+ * Fetches and cleans a YouTube transcript using youtubei.js (Innertube).
  */
 export async function fetchAndCleanTranscript(youtubeUrl: string): Promise<TranscriptResult> {
-  const videoId = extractYoutubeVideoId(youtubeUrl);
-  if (!videoId) return { status: "INVALID_URL" };
-
-  const thumbnailUrl = `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`;
-
   try {
-    let transcriptItems: unknown[] = [];
-    
-    try {
-      transcriptItems = await YoutubeTranscript.fetchTranscript(videoId);
-    } catch (_err: unknown) {
-      try {
-        transcriptItems = await YoutubeTranscript.fetchTranscript(videoId, { lang: 'en' });
-      } catch (enErr: unknown) {
-        const error = enErr as Error;
-        const errMsg = error.message || "";
-        const match = errMsg.match(/Available languages:\s*(.+)/i);
-        
-        if (match && match[1]) {
-          const availableLangs = match[1].split(',').map((l: string) => l.trim().split(' ')[0]).filter(Boolean);
-          if (availableLangs.length > 0) {
-            transcriptItems = await YoutubeTranscript.fetchTranscript(videoId, { lang: availableLangs[0] });
-          } else {
-            return { status: "TRANSCRIPT_MISSING" };
-          }
-        } else {
-          return { status: "TRANSCRIPT_MISSING" };
-        }
-      }
-    }
+    const videoId = extractYoutubeVideoId(youtubeUrl);
+    if (!videoId) return { status: "INVALID_URL" };
 
-    if (!transcriptItems || transcriptItems.length === 0) {
+    const thumbnailUrl = `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`;
+
+    const youtube = await Innertube.create({ 
+      generate_session_locally: true 
+    });
+    
+    const info = await youtube.getInfo(videoId);
+    const transcriptData = await info.getTranscript();
+    
+    const rawTranscript = transcriptData?.transcript
+      ?.content?.body?.initial_segments
+      ?.map((seg: any) => seg.snippet?.text ?? '')
+      .filter(Boolean)
+      .join(' ')
+      .trim();
+
+    if (!rawTranscript || rawTranscript.length < 50) {
       return { status: "TRANSCRIPT_MISSING" };
     }
 
-    const rawText = transcriptItems.map(item => (item as { text: string }).text).join(" ");
-    const cleanedText = cleanTranscript(rawText);
-
+    const cleanedText = cleanTranscript(rawTranscript);
     if (cleanedText.length < 50) {
       return { status: "TRANSCRIPT_MISSING" };
     }
@@ -87,10 +74,12 @@ export async function fetchAndCleanTranscript(youtubeUrl: string): Promise<Trans
       status: "SUCCESS", 
       transcript: cleanedText, 
       source: "transcript",
-      thumbnailUrl 
+      thumbnailUrl
     };
-  } catch (error: unknown) {
-    const err = error as Error;
-    return { status: "FETCH_ERROR", reason: err.message };
+  } catch (err) {
+    return { 
+      status: "FETCH_ERROR", 
+      reason: err instanceof Error ? err.message : "Unknown error" 
+    };
   }
 }
