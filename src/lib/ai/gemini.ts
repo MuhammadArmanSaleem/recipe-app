@@ -9,8 +9,8 @@ if (!process.env.GEMINI_API_KEY) {
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-const PRIMARY_MODEL = GEMINI_MODEL;          // gemini-2.5-flash
-const FALLBACK_MODEL = "gemini-2.0-flash";   // High availability fallback
+const PRIMARY_MODEL = GEMINI_MODEL;          // gemini-2.0-flash
+const FALLBACK_MODEL = "gemini-1.5-flash";   // High availability fallback
 
 const SYSTEM_INSTRUCTION = `
 You are a master culinary AI assistant.
@@ -104,12 +104,21 @@ export function normalizeAiResponse(data: unknown): NormalizedRecipe | { error: 
     checked: false
   }));
 
-  const insts = (Array.isArray(obj.instructions) ? obj.instructions : (Array.isArray(obj.Instructions) ? obj.Instructions : [])) as Record<string, unknown>[];
-  normalized.instructions = insts.map((inst, idx) => ({
-    id: (inst.id || inst.Id || `step-${idx + 1}`) as string,
-    order: Number(inst.order || inst.Order || idx + 1),
-    description: (inst.description || inst.Description || inst.text || inst.Text || "No description") as string
-  }));
+  const insts = (Array.isArray(obj.instructions) ? obj.instructions : (Array.isArray(obj.Instructions) ? obj.Instructions : [])) as (Record<string, unknown> | string)[];
+  normalized.instructions = insts.map((inst, idx) => {
+    if (typeof inst === "string") {
+      return {
+        id: `step-${idx + 1}`,
+        order: idx + 1,
+        description: inst
+      };
+    }
+    return {
+      id: (inst.id || inst.Id || `step-${idx + 1}`) as string,
+      order: Number(inst.order || inst.Order || idx + 1),
+      description: (inst.description || inst.Description || inst.text || inst.Text || "No description") as string
+    };
+  });
 
   return normalized as NormalizedRecipe;
 }
@@ -124,6 +133,28 @@ function is503(error: unknown): boolean {
   );
 }
 
+function is429(error: unknown): boolean {
+  const err = error as { status?: number; message?: string };
+  const msg = String(err?.message ?? "");
+  return (
+    err?.status === 429 ||
+    msg.includes("429") ||
+    msg.includes("Too Many Requests") ||
+    msg.includes("Quota exceeded") ||
+    msg.includes("quota")
+  );
+}
+
+/** Returns true if error is retryable (503 overload only — NOT 429 quota exhaustion) */
+function isTransientError(error: unknown): boolean {
+  return is503(error);
+}
+
+/** Returns true if error means we should immediately try the next model */
+function isQuotaExhausted(error: unknown): boolean {
+  return is429(error);
+}
+
 async function withRetry<T>(
   fn: () => Promise<T>,
   retries = 3,
@@ -135,7 +166,10 @@ async function withRetry<T>(
       return await fn();
     } catch (err: unknown) {
       lastError = err;
-      if (!is503(err)) throw err;
+      // 429 quota exhausted — don't retry, immediately escalate to caller
+      if (isQuotaExhausted(err)) throw err;
+      // non-503 errors are not retryable either
+      if (!isTransientError(err)) throw err;
       const waitMs = attempt * 2000;
       console.warn(`${label}: 503 received (attempt ${attempt}/${retries}). Retrying in ${waitMs / 1000}s…`);
       await new Promise((r) => setTimeout(r, waitMs));
@@ -155,8 +189,10 @@ async function generateWithFallback(
     const result = await withRetry(() => primaryModel.generateContent(request), 3, `Model ${PRIMARY_MODEL}`);
     return result.response.text();
   } catch (primaryErr: unknown) {
-    if (!is503(primaryErr)) throw primaryErr;
-    console.warn(`${PRIMARY_MODEL} persistently unavailable. Falling back to ${FALLBACK_MODEL}…`);
+    // Fall through to fallback on quota exhaustion (429) OR persistent overload (503)
+    if (!isTransientError(primaryErr) && !isQuotaExhausted(primaryErr)) throw primaryErr;
+    const reason = isQuotaExhausted(primaryErr) ? "quota exhausted (429)" : "persistently unavailable (503)";
+    console.warn(`${PRIMARY_MODEL} ${reason}. Falling back to ${FALLBACK_MODEL}…`);
     const fallbackModel = genAI.getGenerativeModel({ model: FALLBACK_MODEL });
     const result = await withRetry(() => fallbackModel.generateContent(request), 2, `Model ${FALLBACK_MODEL}`);
     return result.response.text();
