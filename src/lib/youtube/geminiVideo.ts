@@ -1,37 +1,17 @@
 import { GoogleGenAI } from "@google/genai";
+import { normalizeYoutubeUrl } from "@/lib/utils/url";
 
 if (!process.env.GEMINI_API_KEY) {
   throw new Error("GEMINI_API_KEY is not set. Add it to .env.local");
 }
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-const GEMINI_VIDEO_MODEL = "gemini-2.5-flash";
+const GEMINI_VIDEO_MODEL = "gemini-2.0-flash";
 
 export type GeminiVideoResult =
   | { status: "SUCCESS"; rawAiResponse: string }
   | { status: "VIDEO_UNREADABLE" }
   | { status: "AI_ERROR"; reason: string };
-
-const normalizeYoutubeUrl = (url: string): string => {
-  try {
-    const parsed = new URL(url);
-    if (parsed.hostname === 'youtu.be') {
-      const videoId = parsed.pathname.slice(1).split('?')[0];
-      return `https://www.youtube.com/watch?v=${videoId}`;
-    }
-    if (parsed.pathname.includes('/shorts/')) {
-      const videoId = parsed.pathname.split('/shorts/')[1].split('?')[0];
-      return `https://www.youtube.com/watch?v=${videoId}`;
-    }
-    const vParam = parsed.searchParams.get('v');
-    if (vParam) {
-      return `https://www.youtube.com/watch?v=${vParam}`;
-    }
-    return url;
-  } catch {
-    return url;
-  }
-};
 
 export async function extractRecipeFromVideoUrl(
   youtubeUrl: string,
@@ -67,18 +47,13 @@ export async function extractRecipeFromVideoUrl(
     5. Return ONLY the raw JSON object. No markdown.
   `;
 
+  // Use the caller's signal or create a default timeout signal
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 45000);
-
-  if (signal) {
-    if (signal.aborted) {
-      clearTimeout(timeoutId);
-      return { status: "AI_ERROR", reason: "Aborted by caller" };
-    }
-    signal.addEventListener("abort", () => {
-      controller.abort();
-    });
-  }
+  
+  // If signal is provided, we link it. 
+  // However, the best way with modern SDKs is passing it directly.
+  const combinedSignal = signal || controller.signal;
 
   try {
     const result = await ai.models.generateContent({
@@ -96,6 +71,11 @@ export async function extractRecipeFromVideoUrl(
           ],
         },
       ],
+      // Pass signal to the SDK
+      config: {
+        // @ts-ignore - The SDK supports abortSignal but types might be trailing
+        abortSignal: combinedSignal
+      }
     });
 
     clearTimeout(timeoutId);
@@ -114,10 +94,12 @@ export async function extractRecipeFromVideoUrl(
     }
   } catch (err: unknown) {
     clearTimeout(timeoutId);
-    if (err instanceof Error && err.name === 'AbortError') {
-      console.log('[TIER 1 TIMEOUT] Falling through to Tier 2');
-      return { status: "AI_ERROR", reason: "Timeout after 45s" };
+    
+    if (err instanceof Error && (err.name === 'AbortError' || err.message.includes('abort'))) {
+      console.log('[TIER 1 ABORT/TIMEOUT] Falling through to Tier 2');
+      return { status: "AI_ERROR", reason: "Operation aborted or timed out" };
     }
+    
     console.error('[TIER 1 DETAILED ERROR]',
       err instanceof Error
         ? { message: err.message, stack: err.stack, name: err.name }
@@ -127,5 +109,7 @@ export async function extractRecipeFromVideoUrl(
       status: "AI_ERROR",
       reason: err instanceof Error ? err.message : "Unknown error"
     };
+  } finally {
+    clearTimeout(timeoutId);
   }
 }

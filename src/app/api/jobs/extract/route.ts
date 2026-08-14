@@ -1,12 +1,16 @@
 import { NextResponse } from "next/server";
+import { verifySignatureAppRouter } from "@upstash/qstash/nextjs";
 import { createClient } from "@supabase/supabase-js";
 import { fetchAndCleanTranscript, extractYoutubeVideoId } from "@/lib/youtube/transcript";
-import { normalizeAiResponse } from "@/lib/ai/gemini";
+import { normalizeAiResponse } from "@/lib/ai/utils";
 import { fetchVideoDescription } from "@/lib/youtube/description";
 import { extractRecipeFromVideoUrl } from "@/lib/youtube/geminiVideo";
 import { extractRecipeFromText } from "@/lib/youtube/geminiText";
 import { RecipeDataSchema } from "@/schemas/recipe";
 import { RecipeData } from "@/types/recipe";
+
+// Configure maximum duration for sequential extraction (5 mins)
+export const maxDuration = 300;
 
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -14,117 +18,187 @@ const supabaseAdmin = createClient(
 );
 
 async function handler(req: Request) {
-  const { jobId } = await req.json();
-  if (!jobId) return NextResponse.json({ error: "Missing jobId" }, { status: 400 });
+  let jobId: string | undefined;
+  
+  try {
+    const body = await req.json();
+    jobId = body.jobId;
+    
+    if (!jobId) {
+      return NextResponse.json({ error: "Missing jobId" }, { status: 400 });
+    }
 
-  // 1. Get job
-  const { data: job, error: jobError } = await supabaseAdmin
-    .from("extraction_jobs")
-    .select("*")
-    .eq("id", jobId)
-    .single();
-
-  if (jobError || !job) return NextResponse.json({ error: "Job not found" }, { status: 404 });
-
-  await supabaseAdmin
-    .from("extraction_jobs")
-    .update({ status: "processing" })
-    .eq("id", jobId);
-
-  // 2. Perform Extraction (4-Tier logic)
-  const recipeData = await runExtractionPipeline(job.url, job.user_id);
-
-  // 3. Update Job & Persist Recipe
-  if (recipeData) {
-    // Save to recipes table...
-    // (Logic moved from server action)
-    await supabaseAdmin
+    // 1. Get job and check idempotency
+    const { data: job, error: jobError } = await supabaseAdmin
       .from("extraction_jobs")
-      .update({ status: "completed", result: recipeData })
-      .eq("id", jobId);
-  } else {
-    await supabaseAdmin
+      .select("*")
+      .eq("id", jobId)
+      .single();
+
+    if (jobError || !job) {
+      return NextResponse.json({ error: "Job not found" }, { status: 404 });
+    }
+
+    // If job is already processing or completed, skip to avoid duplicates/conflicts
+    if (job.status === "completed") {
+      return NextResponse.json({ success: true, message: "Job already completed" });
+    }
+    
+    if (job.status === "processing") {
+      // Potentially a retry from QStash while it's still running. 
+      // In a more complex system we'd check updated_at for staleness.
+      return NextResponse.json({ success: true, message: "Job already processing" });
+    }
+
+    // 2. Mark as processing
+    const { error: startError } = await supabaseAdmin
       .from("extraction_jobs")
-      .update({ status: "failed", error: "Extraction failed" })
+      .update({ status: "processing", updated_at: new Date().toISOString() })
       .eq("id", jobId);
+
+    if (startError) throw new Error(`Failed to start job: ${startError.message}`);
+
+    // 3. Perform Extraction (4-Tier logic)
+    const recipeData = await runExtractionPipeline(job.url, job.user_id);
+
+    if (recipeData) {
+      // 4. Update Job with result
+      const { error: finalError } = await supabaseAdmin
+        .from("extraction_jobs")
+        .update({ 
+          status: "completed", 
+          result: recipeData,
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", jobId);
+
+      if (finalError) throw new Error(`Failed to complete job record: ${finalError.message}`);
+    } else {
+      throw new Error("All extraction tiers failed to yield a recipe.");
+    }
+
+    return NextResponse.json({ success: true });
+  } catch (err: unknown) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    console.error(`[WORKER ERROR] Job ${jobId}:`, errorMsg);
+    
+    if (jobId) {
+      await supabaseAdmin
+        .from("extraction_jobs")
+        .update({ 
+          status: "failed", 
+          error: errorMsg,
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", jobId);
+    }
+    
+    return NextResponse.json({ error: errorMsg }, { status: 500 });
   }
-
-  return NextResponse.json({ success: true });
 }
 
 async function runExtractionPipeline(url: string, userId: string): Promise<RecipeData | null> {
-  const { data: profile } = await supabaseAdmin
-    .from("profiles")
-    .select("dietary_goals, serving_default")
-    .eq("id", userId)
-    .single();
-    
-  const userContext = {
-    dietaryGoals: profile?.dietary_goals || [],
-    servingDefault: profile?.serving_default || 2
-  };
-
-  let recipeData: RecipeData | null = null;
-  const videoId = extractYoutubeVideoId(url);
-  const thumbnailUrl = videoId 
-    ? `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg` 
-    : "https://img.youtube.com/vi/default.jpg";
-
-  // --- TIER 1: Video Understanding ---
-  const tier1 = await extractRecipeFromVideoUrl(url, userContext, new AbortController().signal);
-  if (tier1.status === "SUCCESS") {
-    recipeData = await validateAndParse(tier1.rawAiResponse);
-  }
-
-  // --- TIER 2: Transcript ---
-  if (!recipeData) {
-    const transcript = await fetchAndCleanTranscript(url);
-    if (transcript.status === "SUCCESS") {
-      const tier2 = await extractRecipeFromText(transcript.transcript, userContext);
-      if (tier2.status === "SUCCESS") recipeData = await validateAndParse(tier2.rawAiResponse);
-    }
-  }
-
-  // --- TIER 3: Description ---
-  if (!recipeData) {
-    const desc = await fetchVideoDescription(url);
-    if (desc.status === "SUCCESS") {
-      const tier3 = await extractRecipeFromText(`${desc.videoTitle}\n\n${desc.content}`, userContext);
-      if (tier3.status === "SUCCESS") recipeData = await validateAndParse(tier3.rawAiResponse);
-    }
-  }
-
-  if (recipeData) {
-    // Persist to recipes table
-    const { data: recipe } = await supabaseAdmin
-      .from("recipes")
-      .insert({
-        user_id: userId,
-        original_url: url,
-        source: 'youtube',
-        status: "completed",
-        thumbnail_url: thumbnailUrl,
-      })
-      .select()
+  try {
+    const { data: profile, error: profileError } = await supabaseAdmin
+      .from("profiles")
+      .select("dietary_goals, serving_default")
+      .eq("id", userId)
       .single();
       
-    // Persist version
-    const { data: version } = await supabaseAdmin
-      .from("recipe_versions")
-      .insert({
-        recipe_id: recipe.id,
-        version_number: 1,
-        recipe_data: recipeData,
-      })
-      .select()
-      .single();
-    
-    await supabaseAdmin
-        .from("recipes")
-        .update({ current_version_id: version.id })
-        .eq("id", recipe.id);
+    if (profileError) console.warn("Failed to fetch profile for extraction context:", profileError.message);
 
-    return { ...recipeData, id: recipe.id };
+    const userContext = {
+      dietaryGoals: profile?.dietary_goals || [],
+      servingDefault: profile?.serving_default || 2
+    };
+
+    let recipeData: RecipeData | null = null;
+    const videoId = extractYoutubeVideoId(url);
+    const thumbnailUrl = videoId 
+      ? `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg` 
+      : "https://img.youtube.com/vi/default.jpg";
+
+    // --- TIER 1: Video Understanding ---
+    try {
+      const tier1 = await extractRecipeFromVideoUrl(url, userContext, new AbortController().signal);
+      if (tier1.status === "SUCCESS") {
+        recipeData = await validateAndParse(tier1.rawAiResponse);
+      }
+    } catch (e) {
+      console.warn("Tier 1 failed:", e);
+    }
+
+    // --- TIER 2: Transcript ---
+    if (!recipeData) {
+      try {
+        const transcript = await fetchAndCleanTranscript(url);
+        if (transcript.status === "SUCCESS") {
+          const tier2 = await extractRecipeFromText(transcript.transcript, userContext);
+          if (tier2.status === "SUCCESS") recipeData = await validateAndParse(tier2.rawAiResponse);
+        }
+      } catch (e) {
+        console.warn("Tier 2 failed:", e);
+      }
+    }
+
+    // --- TIER 3: Description ---
+    if (!recipeData) {
+      try {
+        const desc = await fetchVideoDescription(url);
+        if (desc.status === "SUCCESS") {
+          const tier3 = await extractRecipeFromText(`${desc.videoTitle}\n\n${desc.content}`, userContext);
+          if (tier3.status === "SUCCESS") recipeData = await validateAndParse(tier3.rawAiResponse);
+        }
+      } catch (e) {
+        console.warn("Tier 3 failed:", e);
+      }
+    }
+
+    if (recipeData) {
+      // 5. Persist to recipes table
+      const { data: recipe, error: recipeError } = await supabaseAdmin
+        .from("recipes")
+        .insert({
+          user_id: userId,
+          original_url: url,
+          source: 'youtube',
+          status: "completed",
+          thumbnail_url: thumbnailUrl,
+        })
+        .select()
+        .single();
+        
+      if (recipeError || !recipe) throw new Error(`Failed to insert recipe: ${recipeError?.message}`);
+        
+      // 6. Persist version
+      const { data: version, error: versionError } = await supabaseAdmin
+        .from("recipe_versions")
+        .insert({
+          recipe_id: recipe.id,
+          version_number: 1,
+          recipe_data: recipeData,
+        })
+        .select()
+        .single();
+      
+      if (versionError || !version) {
+        // Cleanup orphaned recipe row to maintain integrity
+        await supabaseAdmin.from("recipes").delete().eq("id", recipe.id);
+        throw new Error(`Failed to insert recipe version: ${versionError?.message}`);
+      }
+      
+      const { error: updateError } = await supabaseAdmin
+          .from("recipes")
+          .update({ current_version_id: version.id })
+          .eq("id", recipe.id);
+
+      if (updateError) throw new Error(`Failed to update recipe with version ID: ${updateError.message}`);
+
+      return { ...recipeData, id: recipe.id };
+    }
+  } catch (e) {
+    console.error("Pipeline execution error:", e);
+    throw e;
   }
   
   return null;
@@ -139,10 +213,10 @@ async function validateAndParse(rawAiResponse: string): Promise<RecipeData | nul
         return RecipeDataSchema.parse(normalized) as RecipeData;
     }
   } catch (e) {
-    console.error("Parsing failed", e);
+    console.warn("Validation/Parsing failed", e);
   }
   return null;
 }
 
-// FIXME: Proper App Router signature verification needed
-export const POST = handler;
+// Sign with QStash keys
+export const POST = verifySignatureAppRouter(handler);

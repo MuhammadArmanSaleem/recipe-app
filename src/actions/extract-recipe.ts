@@ -4,29 +4,13 @@ import { getSupabaseServer, ensureUserProfile } from "@/lib/supabase/server";
 import { youtubeUrlSchema } from "@/lib/validation/youtube";
 import { checkRateLimit } from "@/lib/ratelimit";
 import { Client } from "@upstash/qstash";
+import { normalizeYoutubeUrl } from "@/lib/utils/url";
 
 const qstash = new Client({ token: process.env.QSTASH_TOKEN! });
 
 export type ExtractRecipeResult =
   | { success: true; jobId: string }
   | { success: false; error: string };
-
-const normalizeYoutubeUrl = (url: string): string => {
-  try {
-    const parsed = new URL(url);
-    if (parsed.hostname === 'youtu.be') {
-      const videoId = parsed.pathname.slice(1);
-      return `https://www.youtube.com/watch?v=${videoId}`;
-    }
-    if (parsed.pathname.includes('/shorts/')) {
-      const videoId = parsed.pathname.split('/shorts/')[1].split('/')[0];
-      return `https://www.youtube.com/watch?v=${videoId}`;
-    }
-    return url;
-  } catch {
-    return url;
-  }
-};
 
 export async function extractRecipe(rawUrl: string): Promise<ExtractRecipeResult> {
   const url = normalizeYoutubeUrl(rawUrl);
@@ -64,9 +48,15 @@ export async function extractRecipe(rawUrl: string): Promise<ExtractRecipeResult
   }
 
   // 2. Enqueue via QStash
+  const callbackUrl = process.env.QSTASH_CALLBACK_URL;
+  if (!callbackUrl) {
+    console.error("CRITICAL: QSTASH_CALLBACK_URL is not configured.");
+    return { success: false, error: "Server configuration error. Please try again later." };
+  }
+
   try {
     await qstash.publishJSON({
-      url: `${process.env.NEXT_PUBLIC_BASE_URL}/api/jobs/extract`,
+      url: callbackUrl,
       body: { jobId: job.id },
       retries: 3,
     });

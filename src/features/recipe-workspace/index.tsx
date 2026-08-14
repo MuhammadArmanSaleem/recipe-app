@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { UrlInput } from "./components/url-input";
 import { AiCommandBar } from "./components/ai-command-bar";
 import { RecipeSelector } from "./components/recipe-selector";
@@ -131,6 +131,15 @@ export function RecipeWorkspace() {
     getInitialData();
   }, [searchParams]);
 
+  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const pollCountRef = useRef<number>(0);
+
+  useEffect(() => {
+    return () => {
+      if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+    };
+  }, []);
+
   const handleExtract = async (url: string) => {
     const parsedUrl = youtubeUrlSchema.safeParse(url.trim());
     if (!parsedUrl.success) {
@@ -138,6 +147,11 @@ export function RecipeWorkspace() {
       setErrorMessage(msg);
       toast.error(msg);
       return;
+    }
+
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
     }
 
     setIsLoading(true);
@@ -148,7 +162,7 @@ export function RecipeWorkspace() {
       const result = await extractRecipe(parsedUrl.data);
 
       if (result.success) {
-        // Start polling for the job status
+        pollCountRef.current = 0;
         pollJobStatus(result.jobId, toastId);
       } else {
         setErrorMessage(result.error);
@@ -164,25 +178,43 @@ export function RecipeWorkspace() {
   };
 
   const pollJobStatus = (jobId: string, toastId: string | number) => {
-    const interval = setInterval(async () => {
-      const { data: job } = await supabase
+    pollIntervalRef.current = setInterval(async () => {
+      pollCountRef.current += 1;
+
+      if (pollCountRef.current > 60) {
+        if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+        setErrorMessage("Extraction timed out. Please try again.");
+        toast.error("Extraction timed out. Try again.", { id: toastId });
+        setIsLoading(false);
+        return;
+      }
+
+      const { data: job, error: queryError } = await supabase
         .from("extraction_jobs")
         .select("status, result, error")
         .eq("id", jobId)
         .single();
 
+      if (queryError) {
+        if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+        setErrorMessage(`Polling failed: ${queryError.message}`);
+        toast.error(`Error checking job: ${queryError.message}`, { id: toastId });
+        setIsLoading(false);
+        return;
+      }
+
       if (job?.status === "completed") {
-        clearInterval(interval);
+        if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
         setRecipe(job.result);
         setIsLoading(false);
         toast.success("Recipe extracted successfully!", { id: toastId });
       } else if (job?.status === "failed") {
-        clearInterval(interval);
+        if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
         setErrorMessage(job.error || "Extraction failed");
         toast.error(job.error || "Extraction failed", { id: toastId });
         setIsLoading(false);
       }
-    }, 2000); // Poll every 2 seconds
+    }, 2000);
   };
 
   const handlePantrySubmit = async (ingredients: string) => {
