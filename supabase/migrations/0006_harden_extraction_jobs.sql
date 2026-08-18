@@ -2,12 +2,15 @@
 
 -- 1. Create or replace the set_updated_at trigger function
 create or replace function public.set_updated_at()
-returns trigger as $$
+returns trigger
+language plpgsql
+as $$
 begin
   new.updated_at = timezone('utc'::text, now());
   return new;
 end;
-$$ language plpgsql;
+$$;
+ALTER FUNCTION public.set_updated_at() SET search_path = '';
 
 -- 2. Update the extraction_jobs table (if it exists)
 do $$

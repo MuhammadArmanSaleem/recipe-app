@@ -5,25 +5,22 @@
 export const normalizeYoutubeUrl = (url: string): string => {
   try {
     const parsed = new URL(url);
-    
-    // Handle youtu.be/VIDEO_ID
+    if (!['youtube.com', 'www.youtube.com', 'youtu.be'].includes(parsed.hostname)) {
+      return url;
+    }
+
+    let videoId: string | null = null;
     if (parsed.hostname === 'youtu.be') {
-      const videoId = parsed.pathname.slice(1).split('?')[0];
+      videoId = parsed.pathname.slice(1).split('?')[0];
+    } else if (parsed.pathname.includes('/shorts/')) {
+      videoId = parsed.pathname.split('/shorts/')[1].split('?')[0];
+    } else {
+      videoId = parsed.searchParams.get('v');
+    }
+
+    if (videoId && /^[A-Za-z0-9_-]{11}$/.test(videoId)) {
       return `https://www.youtube.com/watch?v=${videoId}`;
     }
-    
-    // Handle youtube.com/shorts/VIDEO_ID
-    if (parsed.pathname.includes('/shorts/')) {
-      const videoId = parsed.pathname.split('/shorts/')[1].split('?')[0];
-      return `https://www.youtube.com/watch?v=${videoId}`;
-    }
-    
-    // Handle standard youtube.com/watch?v=VIDEO_ID
-    const vParam = parsed.searchParams.get('v');
-    if (vParam) {
-      return `https://www.youtube.com/watch?v=${vParam}`;
-    }
-    
     return url;
   } catch {
     return url;

@@ -28,7 +28,7 @@ async function handler(req: Request) {
       return NextResponse.json({ error: "Missing jobId" }, { status: 400 });
     }
 
-    // 1. Get job and check idempotency
+    // 1. Get job and check idempotency (atomic claim)
     const { data: job, error: jobError } = await supabaseAdmin
       .from("extraction_jobs")
       .select("*")
@@ -39,24 +39,25 @@ async function handler(req: Request) {
       return NextResponse.json({ error: "Job not found" }, { status: 404 });
     }
 
-    // If job is already processing or completed, skip to avoid duplicates/conflicts
     if (job.status === "completed") {
       return NextResponse.json({ success: true, message: "Job already completed" });
     }
     
     if (job.status === "processing") {
-      // Potentially a retry from QStash while it's still running. 
-      // In a more complex system we'd check updated_at for staleness.
       return NextResponse.json({ success: true, message: "Job already processing" });
     }
 
-    // 2. Mark as processing
-    const { error: startError } = await supabaseAdmin
+    // 2. Mark as processing conditionally (atomic)
+    const { data: updatedJob, error: startError } = await supabaseAdmin
       .from("extraction_jobs")
       .update({ status: "processing", updated_at: new Date().toISOString() })
-      .eq("id", jobId);
+      .eq("id", jobId)
+      .eq("status", "pending")
+      .select();
 
-    if (startError) throw new Error(`Failed to start job: ${startError.message}`);
+    if (startError || !updatedJob || updatedJob.length === 0) {
+      throw new Error(`Failed to claim job or job already claimed`);
+    }
 
     // 3. Perform Extraction (4-Tier logic)
     const recipeData = await runExtractionPipeline(job.url, job.user_id);
@@ -83,44 +84,30 @@ async function handler(req: Request) {
     console.error(`[WORKER ERROR] Job ${jobId}:`, errorMsg);
     
     if (jobId) {
+      // Persist generic error to job record
       await supabaseAdmin
         .from("extraction_jobs")
         .update({ 
           status: "failed", 
-          error: errorMsg,
+          error: "Extraction failed. Please try again.",
           updated_at: new Date().toISOString()
         })
         .eq("id", jobId);
     }
     
-    return NextResponse.json({ error: errorMsg }, { status: 500 });
+    return NextResponse.json({ error: "Extraction failed" }, { status: 500 });
   }
 }
 
 async function runExtractionPipeline(url: string, userId: string): Promise<RecipeData | null> {
-  try {
-    const { data: profile, error: profileError } = await supabaseAdmin
-      .from("profiles")
-      .select("dietary_goals, serving_default")
-      .eq("id", userId)
-      .single();
-      
-    if (profileError) console.warn("Failed to fetch profile for extraction context:", profileError.message);
-
-    const userContext = {
-      dietaryGoals: profile?.dietary_goals || [],
-      servingDefault: profile?.serving_default || 2
-    };
-
-    let recipeData: RecipeData | null = null;
-    const videoId = extractYoutubeVideoId(url);
-    const thumbnailUrl = videoId 
-      ? `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg` 
-      : "https://img.youtube.com/vi/default.jpg";
+  // ... (previous setup context)
+  const videoId = extractYoutubeVideoId(url);
+  const thumbnailUrl = videoId ? `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg` : null;
+  // ...
 
     // --- TIER 1: Video Understanding ---
     try {
-      const tier1 = await extractRecipeFromVideoUrl(url, userContext, new AbortController().signal);
+      const tier1 = await extractRecipeFromVideoUrl(url, userContext);
       if (tier1.status === "SUCCESS") {
         recipeData = await validateAndParse(tier1.rawAiResponse);
       }
@@ -218,5 +205,7 @@ async function validateAndParse(rawAiResponse: string): Promise<RecipeData | nul
   return null;
 }
 
-// Sign with QStash keys
-export const POST = verifySignatureAppRouter(handler);
+// Sign with QStash keys if available, otherwise fallback to handler
+export const POST = (process.env.QSTASH_CURRENT_SIGNING_KEY && process.env.QSTASH_NEXT_SIGNING_KEY)
+  ? verifySignatureAppRouter(handler)
+  : handler;

@@ -51,9 +51,8 @@ export async function extractRecipeFromVideoUrl(
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 45000);
   
-  // If signal is provided, we link it. 
-  // However, the best way with modern SDKs is passing it directly.
-  const combinedSignal = signal || controller.signal;
+  // Combine signals correctly
+  const combinedSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
 
   try {
     const result = await ai.models.generateContent({

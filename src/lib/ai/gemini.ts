@@ -64,8 +64,10 @@ export async function createRecipeFromPantry(
   try {
     const text = await generateRecipeContent(prompt);
     const normalized = normalizeAiResponse(JSON.parse(text.replace(/```[a-z]*/gi, "").trim()));
-    return normalized;
+    if ("error" in normalized) return { error: normalized.error };
+    return RecipeDataSchema.parse(normalized) as RecipeData;
   } catch (err) {
+    console.error("Pantry generation error:", err);
     return { error: "Failed to generate recipe from pantry items." };
   }
 }
