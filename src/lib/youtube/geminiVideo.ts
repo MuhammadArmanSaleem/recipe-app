@@ -1,11 +1,12 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
-import { GEMINI_MODEL } from "../ai/config";
+import { GoogleGenAI } from "@google/genai";
+import { normalizeYoutubeUrl } from "@/lib/utils/url";
 
 if (!process.env.GEMINI_API_KEY) {
   throw new Error("GEMINI_API_KEY is not set. Add it to .env.local");
 }
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+const GEMINI_VIDEO_MODEL = "gemini-2.0-flash";
 
 export type GeminiVideoResult =
   | { status: "SUCCESS"; rawAiResponse: string }
@@ -17,7 +18,7 @@ export async function extractRecipeFromVideoUrl(
   userContext: { dietaryGoals: string[]; servingDefault: number },
   signal?: AbortSignal
 ): Promise<GeminiVideoResult> {
-  const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
+  const fullUrl = normalizeYoutubeUrl(youtubeUrl);
 
   const prompt = `
     You are an expert culinary AI. Watch this YouTube cooking video carefully.
@@ -46,38 +47,39 @@ export async function extractRecipeFromVideoUrl(
     5. Return ONLY the raw JSON object. No markdown.
   `;
 
-  // Internal 45-second timeout controller
+  // Use the caller's signal or create a default timeout signal
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 45000);
-
-  // Link signal if provided
-  if (signal) {
-    if (signal.aborted) {
-      clearTimeout(timeoutId);
-      return { status: "AI_ERROR", reason: "Aborted by caller" };
-    }
-    signal.addEventListener("abort", () => {
-      controller.abort();
-    });
-  }
+  
+  // Combine signals correctly
+  const combinedSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
 
   try {
-    const result = await model.generateContent(
-      [
+    const result = await ai.models.generateContent({
+      model: GEMINI_VIDEO_MODEL,
+      contents: [
         {
-          fileData: {
-            mimeType: "video/youtube",
-            fileUri: youtubeUrl,
-          },
+          parts: [
+            {
+              fileData: {
+                mimeType: "video/youtube",
+                fileUri: fullUrl,
+              },
+            },
+            { text: prompt },
+          ],
         },
-        { text: prompt },
       ],
-      { signal: controller.signal }
-    );
+      // Pass signal to the SDK
+      config: {
+        // @ts-ignore - The SDK supports abortSignal but types might be trailing
+        abortSignal: combinedSignal
+      }
+    });
 
     clearTimeout(timeoutId);
 
-    const responseText = result.response.text();
+    const responseText = result.text ?? "";
     const cleanJson = responseText.replace(/```[a-z]*/gi, "").trim();
 
     try {
@@ -91,10 +93,22 @@ export async function extractRecipeFromVideoUrl(
     }
   } catch (err: unknown) {
     clearTimeout(timeoutId);
-    const error = err as Error;
-    if (error.name === "AbortError" || signal?.aborted) {
-      return { status: "AI_ERROR", reason: "Video processing timed out or aborted" };
+    
+    if (err instanceof Error && (err.name === 'AbortError' || err.message.includes('abort'))) {
+      console.log('[TIER 1 ABORT/TIMEOUT] Falling through to Tier 2');
+      return { status: "AI_ERROR", reason: "Operation aborted or timed out" };
     }
-    return { status: "AI_ERROR", reason: error.message || "Unknown error" };
+    
+    console.error('[TIER 1 DETAILED ERROR]',
+      err instanceof Error
+        ? { message: err.message, stack: err.stack, name: err.name }
+        : String(err)
+    );
+    return {
+      status: "AI_ERROR",
+      reason: err instanceof Error ? err.message : "Unknown error"
+    };
+  } finally {
+    clearTimeout(timeoutId);
   }
 }

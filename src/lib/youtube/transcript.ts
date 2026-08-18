@@ -56,7 +56,7 @@ export async function fetchAndCleanTranscript(youtubeUrl: string): Promise<Trans
     
     const rawTranscript = transcriptData?.transcript
       ?.content?.body?.initial_segments
-      ?.map((seg: any) => seg.snippet?.text ?? '')
+      ?.map((seg: { snippet?: { text?: string } }) => seg.snippet?.text ?? '')
       .filter(Boolean)
       .join(' ')
       .trim();
@@ -77,9 +77,9 @@ export async function fetchAndCleanTranscript(youtubeUrl: string): Promise<Trans
       thumbnailUrl
     };
   } catch (err) {
-    return { 
-      status: "FETCH_ERROR", 
-      reason: err instanceof Error ? err.message : "Unknown error" 
-    };
+    console.error('[TIER 2 DETAILED ERROR]',
+      err instanceof Error ? err.message : String(err)
+    );
+    return { status: "FETCH_ERROR", reason: String(err) };
   }
 }

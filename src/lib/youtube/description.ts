@@ -48,8 +48,10 @@ export async function fetchVideoDescription(youtubeUrl: string): Promise<Descrip
       content: cleaned.substring(0, 4000), 
       videoTitle 
     };
-  } catch (error: unknown) {
-    const err = error as Error;
-    return { status: "FETCH_ERROR", reason: err.message };
+  } catch (err) {
+    console.error('[TIER 3 DETAILED ERROR]', 
+      err instanceof Error ? err.message : String(err)
+    );
+    return { status: "FETCH_ERROR", reason: String(err) };
   }
 }
