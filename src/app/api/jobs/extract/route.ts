@@ -100,10 +100,21 @@ async function handler(req: Request) {
 }
 
 async function runExtractionPipeline(url: string, userId: string): Promise<RecipeData | null> {
-  // ... (previous setup context)
-  const videoId = extractYoutubeVideoId(url);
-  const thumbnailUrl = videoId ? `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg` : null;
-  // ...
+  try {
+    const { data: profile } = await supabaseAdmin
+      .from("profiles")
+      .select("dietary_goals, serving_default")
+      .eq("id", userId)
+      .single();
+      
+    const userContext = {
+      dietaryGoals: profile?.dietary_goals || [],
+      servingDefault: profile?.serving_default || 2
+    };
+
+    let recipeData: RecipeData | null = null;
+    const videoId = extractYoutubeVideoId(url);
+    const thumbnailUrl = videoId ? `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg` : null;
 
     // --- TIER 1: Video Understanding ---
     try {
@@ -142,7 +153,6 @@ async function runExtractionPipeline(url: string, userId: string): Promise<Recip
     }
 
     if (recipeData) {
-      // 5. Persist to recipes table
       const { data: recipe, error: recipeError } = await supabaseAdmin
         .from("recipes")
         .insert({
@@ -157,7 +167,6 @@ async function runExtractionPipeline(url: string, userId: string): Promise<Recip
         
       if (recipeError || !recipe) throw new Error(`Failed to insert recipe: ${recipeError?.message}`);
         
-      // 6. Persist version
       const { data: version, error: versionError } = await supabaseAdmin
         .from("recipe_versions")
         .insert({
@@ -169,17 +178,14 @@ async function runExtractionPipeline(url: string, userId: string): Promise<Recip
         .single();
       
       if (versionError || !version) {
-        // Cleanup orphaned recipe row to maintain integrity
         await supabaseAdmin.from("recipes").delete().eq("id", recipe.id);
         throw new Error(`Failed to insert recipe version: ${versionError?.message}`);
       }
       
-      const { error: updateError } = await supabaseAdmin
+      await supabaseAdmin
           .from("recipes")
           .update({ current_version_id: version.id })
           .eq("id", recipe.id);
-
-      if (updateError) throw new Error(`Failed to update recipe with version ID: ${updateError.message}`);
 
       return { ...recipeData, id: recipe.id };
     }
